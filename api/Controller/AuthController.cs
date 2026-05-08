@@ -1,170 +1,80 @@
-﻿using api.Data;
-using api.Model;
-using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication;
+using api.Contracts.Auth;
+using api.Data;
+using api.Entities;
+using api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using Microsoft.Net.Http.Headers;
-using Newtonsoft.Json;
-using System.ComponentModel.DataAnnotations;
-using System.IdentityModel.Tokens.Jwt;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
-namespace api.Controller
+namespace api.Controller;
+
+[ApiController]
+[Route("auth")]
+public class AuthController(CodeCraftDbContext db, ITokenService tokenService) : ControllerBase
 {
-    [ApiController]
-    [Route("/auth")]
-    public class AuthController : ControllerBase
+    [HttpPost("register")]
+    public async Task<ActionResult<AuthResponse>> Register([FromBody] RegisterRequest request)
     {
-        public static User user = new User();
-        private readonly IConfiguration _configuration;
-        private readonly UserDbContext _userDb;
-        private readonly IHttpContextAccessor _contextAccessor;
+        var username = request.Username.Trim();
+        var email = request.Email.Trim().ToLowerInvariant();
 
-        public AuthController(IConfiguration configuration, UserDbContext db, IHttpContextAccessor contextAccessor)
+        if (await db.Users.AnyAsync(u => u.Username == username))
+            return Conflict(new { error = "Username already exists" });
+
+        if (await db.Users.AnyAsync(u => u.Email == email))
+            return Conflict(new { error = "Email already exists" });
+
+        var user = new User
         {
-            _configuration = configuration;
-            _userDb = db;
-            _contextAccessor = contextAccessor;
-        }
-
-        [HttpPost("register")]
-        public IActionResult Register([FromBody] RegisterRequest body)
-        {
-
-            var username = body.username;
-            var isExistsUsername = _userDb.users.FirstOrDefault(item => item.username == username);
-            if(isExistsUsername != null)
-            {
-                return BadRequest(new { error = "User with same username already exists" });
-            }
-
-            var email = body.email;
-            var isExistsEmail = _userDb.users.FirstOrDefault(item => item.email == email);
-            if (isExistsEmail != null)
-            {
-                return BadRequest(new { error = "User with same email already exists" });
-            }
-
-
-
-            if (body.password != body.confirm_password)
-            {
-                return BadRequest(new { error = "Passwords don't match" });
-            }
-
-            var passwordhash = BCrypt.Net.BCrypt.HashPassword(body.password);
-
-
-            User newUser = new User();
-            newUser.email = body.email;
-            newUser.username = body.username;
-            newUser.name = body.name;
-            newUser.passwordhash = passwordhash;
-            _userDb.users.Add(newUser);
-            _userDb.SaveChanges();  
-
-
-            return Ok(new { success = $"User : {username} created successfully" });
-        }
-
-        [HttpPost("login")]
-        public async Task<IActionResult> Login([FromBody] LoginRequest body)
-        {
-            var username = body.username;
-            var requiredUser = _userDb.users.FirstOrDefault(item => item.username == username);
-            if (requiredUser == null)
-            {
-                return BadRequest(new { error = "User not found" });
-            }
-
-            if(!BCrypt.Net.BCrypt.Verify(body.password, requiredUser.passwordhash))
-            {
-                return BadRequest(new { error = "Password not valid" });
-            }
-
-
-            string token = createToken(requiredUser);
-            var claims = new List<Claim>
-        {
-            new Claim(ClaimTypes.NameIdentifier, username),
+            Username = username,
+            Email = email,
+            Name = request.Name.Trim(),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password)
         };
 
-            var claimsIdentity = new ClaimsIdentity(
-                claims, CookieAuthenticationDefaults.AuthenticationScheme);
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
 
-            var authProperties = new AuthenticationProperties
-            {
-                AllowRefresh = body.remember,
-                ExpiresUtc = DateTimeOffset.UtcNow.AddDays(60),
-                IsPersistent = true,
-                IssuedUtc = DateTimeOffset.UtcNow,
-            };
-
-            await HttpContext.SignInAsync(
-                CookieAuthenticationDefaults.AuthenticationScheme,
-                new ClaimsPrincipal(claimsIdentity),
-                authProperties);
-            return Ok( new { success = "Cookie set successfully" });
-        }
-
-        [HttpGet("logout")]
-        public async Task<IActionResult> Logout()
-        {
-            await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-            return Ok();
-
-        }
-
-        [HttpGet("fetch")]
-        [Authorize]
-        public IActionResult Fetch()
-        {
-            var username = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            var userData = _userDb.users.FirstOrDefault(item => item.username == username);
-            UserResponse response = new UserResponse();
-            response.username = userData.username;
-            response.email = userData.email;
-            response.name = userData.name != "" ? userData.name : userData.username;
-            return Ok(new { response });
-        }
-
-        [HttpGet("user")]
-        public IActionResult UserData(string username)
-        {
-            var userData = _userDb.users.FirstOrDefault(item => item.username.Equals(username));
-
-            if(userData == null) { return BadRequest(new { error = "User not found" }); }
-
-            UserResponse response = new UserResponse();
-            response.username = userData.username;
-            response.email = userData.email;
-            response.name = userData.name != "" ? userData.name : userData.username;
-            return Ok(new { response });
-        }
-
-        private string createToken(User user)
-        {
-            List<Claim> claims = new List<Claim>
-            {
-                new Claim(ClaimTypes.Name, user.username),
-                new Claim(ClaimTypes.Role, "Admin")
-            };
-
-            var key = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(_configuration.GetSection("AppSettings:Token").Value!));
-
-            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha512Signature);
-
-            var token = new JwtSecurityToken(
-                claims: claims,
-                expires: DateTime.Now.AddDays(60),
-                signingCredentials: creds
-                );
-
-            var jwt = new JwtSecurityTokenHandler().WriteToken(token);
-
-            return jwt;
-        }
+        var token = tokenService.CreateToken(user);
+        return Ok(new AuthResponse(token, new UserResponse(user.Username, user.Email, user.Name)));
     }
+
+    [HttpPost("login")]
+    public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest request)
+    {
+        var username = request.Username.Trim();
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Username == username);
+        if (user is null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+            return Unauthorized(new { error = "Invalid username or password" });
+
+        var token = tokenService.CreateToken(user);
+        return Ok(new AuthResponse(token, new UserResponse(user.Username, user.Email, user.Name)));
+    }
+
+    [Authorize]
+    [HttpGet("me")]
+    public async Task<ActionResult<UserResponse>> CurrentUser()
+    {
+        var username = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (username is null) return Unauthorized();
+
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Username == username);
+        if (user is null) return NotFound();
+
+        return Ok(new UserResponse(user.Username, user.Email, user.Name));
+    }
+
+    [HttpGet("user")]
+    public async Task<ActionResult<UserResponse>> UserByUsername([FromQuery] string username)
+    {
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Username == username);
+        if (user is null) return NotFound(new { error = "User not found" });
+
+        return Ok(new UserResponse(user.Username, user.Email, user.Name));
+    }
+
+    [HttpGet("fetch")]
+    [Authorize]
+    public Task<ActionResult<UserResponse>> FetchCompat() => CurrentUser();
 }

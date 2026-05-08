@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import CodeEditor from '@/components/CodeEditor';
 import { CodeCraft } from '@/types/CodeCraft';
 import Preview from '@/components/Preview';
@@ -77,40 +77,7 @@ export default function Main({ fetchedCraftData }: { fetchedCraftData: CodeCraft
     const [panelWidths, setPanelWidths] = useState<number[]>([0.33, 0.33, 0.33]);
     const [codeEditorHeight, setCodeEditorHeight] = useState<number>(0.5);
 
-    useEffect(() => {
-        window.addEventListener('beforeunload', handleUnload);
-        window.addEventListener('keydown', handleKeyDown)
-
-        return () => {
-            window.removeEventListener('beforeunload', handleUnload);
-            window.removeEventListener('keydown', handleKeyDown);
-        }
-    }, [css, js, html]);
-
-    useEffect(() => {
-        if(isPublic != craftData.isPublic) {
-            saveCraft();
-        }
-    }, [isPublic]);
-
-    function handleUnload(e: BeforeUnloadEvent) {
-        const shouldShowAlert = !(js === craftData.js && html === craftData.html && css === craftData.css);
-       
-        if (shouldShowAlert) {
-            const confirmationMessage = 'Are you sure you want to leave? Your changes may not be saved.';
-            (e || window.event).returnValue = confirmationMessage; // Standard for most browsers
-            return confirmationMessage; // For some older browsers
-        }
-    }
-
-    function handleKeyDown(ev : KeyboardEvent) {
-        if(ev.ctrlKey && ev.key === 's') {
-            ev.preventDefault();
-            saveCraft();
-        }
-    }
-
-    function saveCraft() {
+    const saveCraft = useCallback(function saveCraft() {
         if (user == null) {
             toast({
                 variant: "destructive",
@@ -140,7 +107,40 @@ export default function Main({ fetchedCraftData }: { fetchedCraftData: CodeCraft
                 setCraftData(newCraftData);
                 document.title = craftData.name;
             })
-    }
+    }, [craftData, css, html, isPublic, js, router, toast, user]);
+
+    const handleUnload = useCallback(function handleUnload(e: BeforeUnloadEvent) {
+        const shouldShowAlert = !(js === craftData.js && html === craftData.html && css === craftData.css);
+       
+        if (shouldShowAlert) {
+            const confirmationMessage = 'Are you sure you want to leave? Your changes may not be saved.';
+            (e || window.event).returnValue = confirmationMessage; // Standard for most browsers
+            return confirmationMessage; // For some older browsers
+        }
+    }, [craftData.css, craftData.html, craftData.js, css, html, js]);
+
+    const handleKeyDown = useCallback(function handleKeyDown(ev : KeyboardEvent) {
+        if(ev.ctrlKey && ev.key === 's') {
+            ev.preventDefault();
+            saveCraft();
+        }
+    }, [saveCraft]);
+
+    useEffect(() => {
+        window.addEventListener('beforeunload', handleUnload);
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            window.removeEventListener('beforeunload', handleUnload);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [handleKeyDown, handleUnload]);
+
+    useEffect(() => {
+        if (isPublic != craftData.isPublic) {
+            saveCraft();
+        }
+    }, [craftData.isPublic, isPublic, saveCraft]);
 
     function updateJs(e: string) {
         setJs(e);

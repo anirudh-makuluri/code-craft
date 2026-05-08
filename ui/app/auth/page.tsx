@@ -24,7 +24,7 @@ export default function Page() {
                 router.push(`/profile/${user.username}`);
             }
         }
-    }, [user]);
+    }, [user, router, searchParams]);
 
     function toggleAuthType(newAuthType : authType) {
         setAuthType(newAuthType);
@@ -52,4 +52,3 @@ export default function Page() {
         </main>
     )
 }
-

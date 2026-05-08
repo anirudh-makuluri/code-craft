@@ -1,66 +1,150 @@
-using api.Data;
-using api.Model;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using Microsoft.AspNetCore.Authentication.Cookies;
+using api.Data;
+using api.Middleware;
+using api.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
-var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>();
-builder.Services.AddCors(options =>
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
 {
-    options.AddPolicy("myCors", policy =>
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
-        try
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "Enter JWT bearer token"
+    });
+
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
         {
-            policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials();
-        } catch (Exception ex)
-        {
-            Console.WriteLine(ex);
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
         }
     });
 });
-builder.Services.AddDbContext<CodeCraftDbContext>(opt => opt.UseSqlServer(
-    builder.Configuration.GetConnectionString("CodeCraft")
-));
-builder.Services.AddDbContext<UserDbContext>(opt => opt.UseSqlServer(
-    builder.Configuration.GetConnectionString("Users")
-));
-builder.Services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
 
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-    .AddCookie(options =>
+var connString = Environment.GetEnvironmentVariable("CONNECTION_STRING")
+    ?? builder.Configuration.GetConnectionString("CodeCraft")
+    ?? throw new InvalidOperationException("Connection string is required");
+
+builder.Services.AddDbContext<CodeCraftDbContext>(opt => opt.UseSqlServer(connString));
+builder.Services.AddScoped<ITokenService, TokenService>();
+
+var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? ["http://localhost:3000"];
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("frontend", policy =>
+        policy.WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+});
+
+var issuer = Environment.GetEnvironmentVariable("JWT_ISSUER") ?? builder.Configuration["Jwt:Issuer"] ?? "codecraft";
+var audience = Environment.GetEnvironmentVariable("JWT_AUDIENCE") ?? builder.Configuration["Jwt:Audience"] ?? "codecraft-ui";
+var signingKey = Environment.GetEnvironmentVariable("JWT_SIGNING_KEY") ?? builder.Configuration["Jwt:SigningKey"]
+    ?? throw new InvalidOperationException("JWT signing key is required");
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
     {
-        options.Cookie.Name = "session";
-        options.Cookie.Path = "/";
-        options.ExpireTimeSpan = TimeSpan.FromDays(60);
-        options.SlidingExpiration = true;
-        options.Cookie.HttpOnly = true;
-        options.Cookie.SameSite = SameSiteMode.Lax; // Set SameSite to None
-        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest; // Set Secure to None for development
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateIssuerSigningKey = true,
+            ValidateLifetime = true,
+            ValidIssuer = issuer,
+            ValidAudience = audience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey))
+        };
     });
 
 builder.Services.AddAuthorization();
 
-builder.Services.AddControllers();
-
 var app = builder.Build();
-app.UseCors("myCors");
+
+app.UseMiddleware<ExceptionMiddleware>();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseCors("frontend");
 app.UseAuthentication();
 app.UseAuthorization();
-var cookiePolicyOptions = new CookiePolicyOptions
+
+app.MapGet("/", () => Results.Ok(new { status = "Server running" }));
+app.MapGet("/all", async (CodeCraftDbContext db) =>
 {
-    MinimumSameSitePolicy = SameSiteMode.None,
-};
-app.UseCookiePolicy(cookiePolicyOptions);
-
-app.MapGet("/", () => "Server Running");
-app.MapGet("/all", (CodeCraftDbContext db) => {
-    IEnumerable<CodeCraft> codeCrafts = db.codeCrafts.Where(item => item.IsPublic == true);
-    return codeCrafts;
+    var crafts = await db.Crafts.Where(c => c.IsPublic).ToListAsync();
+    var response = new List<object>();
+    foreach (var craft in crafts)
+    {
+        var likes = await db.CraftLikes.Where(l => l.CraftId == craft.Id).Select(l => l.Username).ToListAsync();
+        response.Add(new { craft.CraftId, craft.Name, CreatedBy = craft.CreatedByUsername, craft.Js, craft.Css, craft.Html, craft.IsPublic, craft.IsFork, LikesCount = likes.Count, ViewsCount = await db.CraftViews.CountAsync(v => v.CraftId == craft.Id), LikedBy = string.Join(",", likes) });
+    }
+    return Results.Ok(response);
 });
-
-
 app.MapControllers();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<CodeCraftDbContext>();
+    db.Database.EnsureCreated();
+
+    if (!db.Users.Any())
+    {
+        var devUser = new api.Entities.User
+        {
+            Username = "demo",
+            Name = "Demo User",
+            Email = "demo@example.com",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Password123!")
+        };
+        db.Users.Add(devUser);
+
+        db.Crafts.AddRange(
+            new api.Entities.Craft
+            {
+                CraftId = "hello-world",
+                Name = "Hello World",
+                CreatedByUsername = devUser.Username,
+                Html = "<h1>Hello CodeCraft</h1>",
+                Css = "h1 { color: #0f766e; }",
+                Js = "console.log('hello');",
+                IsPublic = true
+            },
+            new api.Entities.Craft
+            {
+                CraftId = "card-sample",
+                Name = "Card Sample",
+                CreatedByUsername = devUser.Username,
+                Html = "<div class='card'>Card</div>",
+                Css = ".card { padding: 16px; border: 1px solid #ddd; border-radius: 8px; }",
+                Js = "",
+                IsPublic = true
+            }
+        );
+
+        db.SaveChanges();
+    }
+}
+
 app.Run();

@@ -1,16 +1,14 @@
 import { CodeCraft } from '@/types/CodeCraft';
 import Main from '../components/HomePage';
+import { API_BASE_URL } from '@/lib/utils';
 
 async function getCrafts() {
-    return await fetch('http://localhost:5023/all', {
-        cache: "no-cache"
-    })
-        .then(res => res.json())
+  const res = await fetch(`${API_BASE_URL}/api/crafts/public`, { cache: 'no-store' });
+  if (!res.ok) return [];
+  return (await res.json()) as CodeCraft[];
 }
 
 export default async function Page() {
-    const crafts: CodeCraft[] = await getCrafts();
-
-
-    return <Main crafts={crafts}/>
+  const crafts = await getCrafts();
+  return <Main crafts={crafts} />;
 }

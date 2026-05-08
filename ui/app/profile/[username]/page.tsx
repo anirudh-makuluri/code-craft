@@ -1,37 +1,25 @@
-import React, { useEffect } from 'react'
-import Main from './main'
-import { User } from '@/types/User'
+import Main from './main';
 import { notFound } from 'next/navigation';
+import { API_BASE_URL } from '@/lib/utils';
 
 async function getUserData(username: string) {
-    const userResponse = fetch(`http://localhost:5023/auth/user?username=${username}`, {
-        method: "GET",
-        cache: 'no-cache'
-    }).then(res => res.json())
-    
-    
-    const craftResponse = fetch(`http://localhost:5023/api/user?username=${username}`, {
-        method: "GET",
-        cache: 'no-cache'
-    }).then(res => res.json())
+  const [userResp, craftResp] = await Promise.all([
+    fetch(`${API_BASE_URL}/auth/user?username=${username}`, { cache: 'no-store' }),
+    fetch(`${API_BASE_URL}/api/user?username=${username}`, { cache: 'no-store' })
+  ]);
 
-    const [userData, craftData] = await Promise.all([userResponse, craftResponse])
+  if (!userResp.ok) throw new Error('User not found');
+  const userData = await userResp.json();
+  const craftData = craftResp.ok ? await craftResp.json() : [];
 
-    if(userData.error) {
-        throw new Error(userData.error);
-    }
-
-    return [userData.response, craftData]
-
+  return [userData, craftData];
 }
 
 export default async function Page({ params }: { params: { username: string } }) {
-    try {
-        const [userData, craftData] = await getUserData(params.username);
-        return (
-            <Main userData={userData} craftData={craftData}/>
-        )
-    } catch (error) {
-        notFound();
-    }
+  try {
+    const [userData, craftData] = await getUserData(params.username);
+    return <Main userData={userData} craftData={craftData} />;
+  } catch {
+    notFound();
+  }
 }

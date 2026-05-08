@@ -1,63 +1,69 @@
-import { type ClassValue, clsx } from "clsx"
+import { type ClassValue, clsx } from "clsx";
 import { RequestCookie } from "next/dist/compiled/@edge-runtime/cookies";
-import { twMerge } from "tailwind-merge"
- 
+import { twMerge } from "tailwind-merge";
+
 export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+  return twMerge(clsx(inputs));
 }
 
-export const getData = (async (craftId: string, token: RequestCookie | undefined) => {
-    const res = await fetch(`http://localhost:5023/api?craftId=${craftId}`, {
-        headers: {
-            Authorization: `Bearer ${token?.value}`,
-        },
-        method: "GET",
-        cache: 'no-store'
-    });
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:5023";
 
-    if (!res.ok) {
-        throw new Error("Failed to fetch data")
+export const getData = async (craftId: string, token: RequestCookie | undefined) => {
+  const res = await fetch(`${API_BASE_URL}/api/crafts/${craftId}`, {
+    headers: token?.value ? { Authorization: `Bearer ${token.value}` } : {},
+    method: "GET",
+    cache: "no-store"
+  });
+
+  if (!res.ok) throw new Error("Failed to fetch data");
+  return res.json();
+};
+
+export const sleep = async (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function getClientToken() {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("cc_token");
+}
+
+export function setClientToken(token: string | null) {
+  if (typeof window === "undefined") return;
+  if (!token) localStorage.removeItem("cc_token");
+  else localStorage.setItem("cc_token", token);
+}
+
+export const customFetch = async ({
+  pathName,
+  method = "GET",
+  body
+}: {
+  pathName: string;
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  body?: object;
+}): Promise<any> => {
+  const headers: Record<string, string> = {};
+  const token = getClientToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (body) headers["Content-Type"] = "application/json";
+
+  const response = await fetch(`${API_BASE_URL}/${pathName}`, {
+    method,
+    cache: "no-store",
+    headers,
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try {
+      const data = await response.json();
+      message = data.error ?? message;
+    } catch {
+      // ignore
     }
+    throw new Error(message);
+  }
 
-    return res.json();
-})
-
-export const sleep = async (ms : number) => {
-    return new Promise<void>((resolve, _) => {
-        setTimeout(() => {
-            resolve();
-        }, ms);
-    })
-}
-
-export const customFetch = async ({ pathName, method = 'GET', body } : {
-    pathName: string,
-    method?: 'GET' | 'POST' | 'PATCH' | 'PUT',
-    body?: Object
-}) : Promise<any> => {
-    console.log(pathName);
-
-    return new Promise( async (resolve , reject) => {
-        const requestObj : RequestInit  = {
-            method,
-            credentials: 'include',
-            cache: 'no-store'
-        }
-
-        if(method == 'POST') {
-            requestObj.body = JSON.stringify(body);
-            requestObj.headers = {
-                "Content-Type": "application/json",
-            }
-        }
-
-        const response = await fetch(`http://localhost:5023/${pathName}`, requestObj);
-
-        if(!response.ok) {
-            return reject(response);
-        }
-
-        const data = await response.json();
-        resolve(data);
-    })
-}
+  if (response.status === 204) return null;
+  return response.json();
+};
