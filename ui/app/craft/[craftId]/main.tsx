@@ -45,6 +45,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useUser } from '@/app/providers';
 import randomstring from 'randomstring';
+import { customFetch } from '@/lib/utils';
 
 
 const formSchema = zod.object({
@@ -87,24 +88,20 @@ export default function Main({ fetchedCraftData }: { fetchedCraftData: CodeCraft
             return;
         }
 
-        const newCraftData : CodeCraft = { 
-            ...craftData,
+        const saveRequest = {
+            name: craftData.name,
             js,
             html,
             css,
-            createdBy: craftData.createdBy || user.username,
-            isPublic: isPublic
-        }
+            isPublic,
+        };
 
-        fetch("http://localhost:5023/api", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(newCraftData)
-        }).then(res => res.json())
-            .then(() => {
-                setCraftData(newCraftData);
+        customFetch({
+            pathName: `api/crafts/${craftData.craftId}`,
+            method: "PUT",
+            body: saveRequest
+        }).then(() => {
+                setCraftData(prev => ({ ...prev, ...saveRequest }));
                 document.title = craftData.name;
             })
     }, [craftData, css, html, isPublic, js, router, toast, user]);
@@ -187,28 +184,22 @@ export default function Main({ fetchedCraftData }: { fetchedCraftData: CodeCraft
             charset: 'alphanumeric'
         })
 
-        const newCraftData : CodeCraft = {
-            html,
-            css,
-            js,
+        const newCraftData = {
+            craftId,
             name: values.craftName,
-            createdBy: user.username,
-            craftId: craftId,
-            isPublic: isPublic,
+            js,
+            css,
+            html,
+            isPublic,
             isFork: true,
-            viewsCount: 0,
-            likesCount: 0,
-            likedBy: ""
-        }
+            parentCraftId: craftData.craftId
+        };
 
-        fetch("http://localhost:5023/api", {
+        customFetch({
+            pathName: "api/crafts",
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(newCraftData)
-        }).then(res => res.json())
-            .then(() => {
+            body: newCraftData
+        }).then(() => {
                 router.push(`/craft/${craftId}`)
             })
     }

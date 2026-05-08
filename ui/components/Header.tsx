@@ -28,13 +28,20 @@ export default function Header() {
       return;
     }
 
+    const trimmedCraftName = craftName.trim();
+    const nextCraftName = trimmedCraftName || 'Untitled Pen';
+    if (nextCraftName.length < 4) {
+      toast({ variant: 'destructive', description: 'Craft name must be at least 4 characters.' });
+      return;
+    }
+
     const craftId = randomstring.generate({ length: 5, charset: 'alphanumeric' });
     await customFetch({
       pathName: 'api/crafts',
       method: 'POST',
       body: {
         craftId,
-        name: craftName,
+        name: nextCraftName,
         js: DEFAULT_JS,
         css: DEFAULT_CSS,
         html: DEFAULT_HTML,
